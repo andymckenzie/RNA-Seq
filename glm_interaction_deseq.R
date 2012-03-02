@@ -5,9 +5,12 @@
 #generates volcano plot of each of the above comparisons
 
 #primary dependency is bioconductor, r package
-#additional requirement, for volcano plot, is maDB
 
 library ( "DESeq" ) 
+library ( ggplot2 ) 
+
+#free parameter
+expression_cutoff = 0.3
 
 #specify file with one gene per row and counts per condition in each column
 countfile = "genomecounts.txt" 
@@ -33,13 +36,21 @@ xg <- 10^seq( -.5, 5, length.out=300 )
 lines( xg, fitInfo(cdsFull)$dispFun( xg ), col="red" )
 }
 
-#un-comment to call the plot
-#plotDispEsts ( cdsFull )
+#filter out genes with low expression from both the data frame and the table
+rs <- rowSums ( counts ( cdsFull )) 
+use <- (rs > quantile(rs, expression_cutoff)) 
 
-fit0a <- fitNbinomGLMs( cdsFull, count ~ genotype ) 
-fit0b <- fitNbinomGLMs( cdsFull, count ~ condition ) 
-fit1 <- fitNbinomGLMs( cdsFull, count ~ genotype + condition )
-fit2 <- fitNbinomGLMs( cdsFull, count ~ genotype + condition + genotype:condition )
+#filter genes to remove those less than at the 0.3 percentile of total row sum count
+#to a good approx, this measure is uncorrelated with the test statistics under the null hypothesis
+cdsFilt <- cdsFull [ use, ]
+rowsum_count = rowSums (atxaCountTable) 
+use_count = (rowsum_count > quantile(rowsum_count, expression_cutoff))
+atxaCountTable_Filt = atxaCountTable [ use_count, ]  
+
+fit0a <- fitNbinomGLMs( cdsFilt, count ~ genotype ) 
+fit0b <- fitNbinomGLMs( cdsFilt, count ~ condition ) 
+fit1 <- fitNbinomGLMs( cdsFilt, count ~ genotype + condition )
+fit2 <- fitNbinomGLMs( cdsFilt, count ~ genotype + condition + genotype:condition )
 
 #compare fit1 to fit0b = effect of condition
 pvalsGLM_condition <- nbinomGLMTest( fit1, fit0a )
@@ -54,5 +65,20 @@ pvalsGLM_interaction <- nbinomGLMTest( fit2, fit1 )
 #control false discovery rate with benjamini-hochberg
 padjGLM_interaction  <- p.adjust( pvalsGLM_interaction, method="BH") 
 
-#generates volcano plot for condition 
-drawVolcanoPlot(fit2$conditionair,padjGLM_condition)
+#calculate fold change in Ames35_CO2 vs dAtxa_air
+Ames35_CO2_mean = apply(cbind(atxaCountTable_Filt$Ames35_CO2_1, atxaCountTable_Filt$Ames35_CO2_2), 1, mean) 
+dAtxA_air_mean = apply(cbind(atxaCountTable_Filt$Ames35delAtxA_Air_1, atxaCountTable_Filt$Ames35delAtxA_Air_2), 1, mean)
+fold_change = Ames35_CO2_mean / dAtxA_air_mean
+
+#highlight genes that are in the "extended pathogenicity island" 
+atxaCountTable_Filt$threshold = as.factor(row.names(atxaCountTable_Filt) > "RBAH05429" & row.names(atxaCountTable_Filt) < "RBAH05492")
+ 
+#construct the "volcano" plot 
+table = cbind(padjGLM_interaction, fold_change) 
+g = ggplot(data=atxaCountTable_Filt, aes(x=log2(fold_change), y=-log10(padjGLM_interaction), colour=threshold)) +
+  geom_point(alpha=0.4, size=2.5) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00")) + 
+  xlim(c(-10, 10)) + ylim(c(0, 15)) +
+  xlab("log2 fold change") + ylab("-log10 p-value") +
+  theme_bw() + opts(legend.position="none") 
+g
